@@ -1,8 +1,10 @@
 const path = require('path');
 const decache = require('decache');
-const squba = require('squba')
+const squba = require('squba');
+const loaderUtils = require('loader-utils');
+const stringReplaceAsync = require('string-replace-async');
 
-const requireReg = /require\s*\((["'])([\w.\/]+)(?:\1)\)((?:\.[\w_-]+)*);?/igm;
+const requireReg = /@import\s*(["'])([\w.~\/]+\.js)(?:\1)((?:\.[\w_-]+)*);?/igm;
 
 const operator = {
 
@@ -86,26 +88,42 @@ const operator = {
     },
 
     mergeVarsToContent (content, webpackContext, preprocessorType) {
-        const replacer = function (m,q, relativePath, property) {
-            const modulePath = path.join(webpackContext.context, relativePath)
-            const varData = this.getVarData(modulePath, this.propDeDot(property));
-            webpackContext.addDependency(modulePath);
-            return this.transformToStyleVars({
-                type: preprocessorType,
-                varData
+        const { callback } = webpackContext;
+
+        const replacer = function (m, q, relativePath, property) {
+            return new Promise((resolve, reject) => {
+                webpackContext.resolve(webpackContext.context, loaderUtils.urlToRequest(relativePath), (err, modulePath) => {
+                    if (err) {
+                        reject(err);
+                    } else {
+                        const varData = this.getVarData(modulePath, this.propDeDot(property));
+                        webpackContext.addDependency(modulePath);
+                        resolve(this.transformToStyleVars({
+                            type: preprocessorType,
+                            varData
+                        }));
+                    }
+                })
             });
-        }
-        return content.replace(
-            requireReg,
-            replacer.bind(this)
-        );
+        };
+
+        stringReplaceAsync(content, requireReg, replacer.bind(this))
+            .then(result => {
+                callback(null, result);
+            })
+            .catch(err => {
+                callback(err);
+            });
     },
 
     getResource (context) {
-        return context._module.resource;
+        return {
+            resource: context.resource,
+            resourcePath: context.resourcePath,
+        };
     },
 
-    getPreprocessorType ( { resource } ={}) {
+    getPreprocessorType ( { resource, resourcePath } = {}) {
         const preProcs = [
             {
                 type: 'sass',
@@ -117,7 +135,7 @@ const operator = {
             }
         ];
 
-        const result = preProcs.find( item => item.reg.test(resource));
+        const result = preProcs.find( item => item.reg.test(resourcePath));
         if (result) return result.type;
         throw Error(`Unknown preprocesor type for ${resource}`);
     }
@@ -127,10 +145,18 @@ exports.operator = operator;
 
 const loader = function (content) {
     const webpackContext = this;
-    const resource = operator.getResource(webpackContext);
-    const preprocessorType = operator.getPreprocessorType({ resource });
-    const merged = operator.mergeVarsToContent(content, webpackContext, preprocessorType);
-    return merged;
+    const { resource, resourcePath } = operator.getResource(webpackContext);
+    const preprocessorType = operator.getPreprocessorType({ resource, resourcePath });
+    const done = webpackContext.async();
+    const isSync = typeof done !== 'function';
+
+    if (isSync) {
+        throw new Error(
+            'Synchronous compilation is not supported anymore.'
+        );
+    }
+
+    operator.mergeVarsToContent(content, webpackContext, preprocessorType);
 };
 
 exports.default = loader;
