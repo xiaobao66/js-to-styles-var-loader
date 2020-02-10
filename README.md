@@ -24,10 +24,12 @@ current:
 
 - optimize `getPreprocessorType` . Use webpack `resourcePath` to analyze resource type, ignore resource query part.
 
-previous, it not support:
+previous, it can not support:
 
 ```js
 import 'style.less?local';
 ```
 
 but now, it can support above.
+
+Origin README: [REAME-origin.md](./README-origin.md)
